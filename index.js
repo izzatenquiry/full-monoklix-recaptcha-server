@@ -296,14 +296,17 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // 2. CHECK IF RECAPTCHA TOKEN EXISTS
+    // 2. EXTRACT AND REMOVE RECAPTCHA TOKEN FROM BODY
     const recaptchaToken = req.body.recaptchaToken;
+    const bodyWithoutRecaptcha = { ...req.body };
+    delete bodyWithoutRecaptcha.recaptchaToken;
+    
     if (recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token provided, sending to Google VEO...');
+      log('log', req, '🔒 reCAPTCHA token provided, adding to header...');
     }
 
     log('log', req, '📤 Forwarding to VEO API...');
-    log('log', req, '📦 Request body:', req.body);
+    log('log', req, '📦 Request body:', bodyWithoutRecaptcha);
 
     // 3. BUILD HEADERS - Use BOTH API key AND auth token!
     const headers = {
@@ -322,7 +325,7 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoText`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(req.body)
+      body: JSON.stringify(bodyWithoutRecaptcha)  // ← Send body WITHOUT recaptchaToken
     });
 
     const data = await getJson(response, req);
@@ -367,19 +370,22 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // 2. CHECK IF RECAPTCHA TOKEN EXISTS
+    // 2. EXTRACT AND REMOVE RECAPTCHA TOKEN FROM BODY
     const recaptchaToken = req.body.recaptchaToken;
+    const bodyWithoutRecaptcha = { ...req.body };
+    delete bodyWithoutRecaptcha.recaptchaToken;
+    
     if (recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token provided, sending to Google VEO...');
+      log('log', req, '🔒 reCAPTCHA token provided, adding to header...');
     }
 
     log('log', req, '📤 Forwarding to VEO API...');
 
-    if (req.body.requests?.[0]?.startImage?.mediaId) {
-      log('log', req, '📤 Has startImage with mediaId:', req.body.requests[0].startImage.mediaId);
+    if (bodyWithoutRecaptcha.requests?.[0]?.startImage?.mediaId) {
+      log('log', req, '📤 Has startImage with mediaId:', bodyWithoutRecaptcha.requests[0].startImage.mediaId);
     }
-    log('log', req, '📤 Prompt:', req.body.requests?.[0]?.textInput?.prompt?.substring(0, 100) + '...');
-    log('log', req, '📤 Aspect ratio:', req.body.requests?.[0]?.aspectRatio);
+    log('log', req, '📤 Prompt:', bodyWithoutRecaptcha.requests?.[0]?.textInput?.prompt?.substring(0, 100) + '...');
+    log('log', req, '📤 Aspect ratio:', bodyWithoutRecaptcha.requests?.[0]?.aspectRatio);
 
     // 3. BUILD HEADERS - Use BOTH API key AND auth token!
     const headers = {
@@ -398,7 +404,7 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoStartImage`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(req.body)
+      body: JSON.stringify(bodyWithoutRecaptcha)  // ← Send body WITHOUT recaptchaToken
     });
 
     const data = await getJson(response, req);
