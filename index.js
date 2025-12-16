@@ -11,7 +11,7 @@ const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
 // ===============================
 const GOOGLE_API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
 const PROJECT_ID = 'gen-lang-client-0426593366';
-const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
+const RECAPTCHA_SITE_KEY = '6Lf29SwsAAAAANT1f-p_ASlaAFqNyv53E3bgxoV9';
 
 // ===============================
 // 🔐 AUTH STRATEGY (FROM HAR ANALYSIS)
@@ -366,27 +366,36 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // 2. PASS-THROUGH APPROACH - Don't validate, let Google handle it!
-    if (req.body.recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token present, passing through to Google VEO...');
+    // 2. EXTRACT RECAPTCHA TOKEN - Move from body to header!
+    const recaptchaToken = req.body.recaptchaToken;
+    const bodyWithoutRecaptcha = { ...req.body };
+    delete bodyWithoutRecaptcha.recaptchaToken;
+    
+    if (recaptchaToken) {
+      log('log', req, '🔒 reCAPTCHA token extracted, moving to X-Goog-Recaptcha-Token header...');
     }
 
-    log('log', req, '📤 Forwarding to VEO API (with reCAPTCHA in body)...');
-    log('log', req, '📦 Request body:', req.body);
+    log('log', req, '📤 Forwarding to VEO API...');
+    log('log', req, '📦 Request body:', bodyWithoutRecaptcha);
 
-    // 3. BUILD HEADERS
+    // 3. BUILD HEADERS - Add reCAPTCHA to header!
     const headers = {
-      'x-goog-api-key': GOOGLE_API_KEY,      // API key for API access
-      'Authorization': `Bearer ${authToken}`, // User's OAuth token for auth
+      'x-goog-api-key': GOOGLE_API_KEY,
+      'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
       'Origin': 'https://labs.google',
       'Referer': 'https://labs.google/'
     };
 
+    // Add reCAPTCHA token to header if present
+    if (recaptchaToken) {
+      headers['X-Goog-Recaptcha-Token'] = recaptchaToken;
+    }
+
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoText`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(req.body)  // ← Send FULL body INCLUDING recaptchaToken!
+      body: JSON.stringify(bodyWithoutRecaptcha)  // Send body WITHOUT recaptchaToken
     });
 
     const data = await getJson(response, req);
@@ -431,20 +440,24 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // 2. PASS-THROUGH APPROACH - Don't validate, let Google handle it!
-    if (req.body.recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token present, passing through to Google VEO...');
+    // 2. EXTRACT RECAPTCHA TOKEN - Move from body to header!
+    const recaptchaToken = req.body.recaptchaToken;
+    const bodyWithoutRecaptcha = { ...req.body };
+    delete bodyWithoutRecaptcha.recaptchaToken;
+    
+    if (recaptchaToken) {
+      log('log', req, '🔒 reCAPTCHA token extracted, moving to X-Goog-Recaptcha-Token header...');
     }
 
-    log('log', req, '📤 Forwarding to VEO API (with reCAPTCHA in body)...');
+    log('log', req, '📤 Forwarding to VEO API...');
 
-    if (req.body.requests?.[0]?.startImage?.mediaId) {
-      log('log', req, '📤 Has startImage with mediaId:', req.body.requests[0].startImage.mediaId);
+    if (bodyWithoutRecaptcha.requests?.[0]?.startImage?.mediaId) {
+      log('log', req, '📤 Has startImage with mediaId:', bodyWithoutRecaptcha.requests[0].startImage.mediaId);
     }
-    log('log', req, '📤 Prompt:', req.body.requests?.[0]?.textInput?.prompt?.substring(0, 100) + '...');
-    log('log', req, '📤 Aspect ratio:', req.body.requests?.[0]?.aspectRatio);
+    log('log', req, '📤 Prompt:', bodyWithoutRecaptcha.requests?.[0]?.textInput?.prompt?.substring(0, 100) + '...');
+    log('log', req, '📤 Aspect ratio:', bodyWithoutRecaptcha.requests?.[0]?.aspectRatio);
 
-    // 3. BUILD HEADERS
+    // 3. BUILD HEADERS - Add reCAPTCHA to header!
     const headers = {
       'x-goog-api-key': GOOGLE_API_KEY,
       'Authorization': `Bearer ${authToken}`,
@@ -452,11 +465,16 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       'Origin': 'https://labs.google',
       'Referer': 'https://labs.google/'
     };
+
+    // Add reCAPTCHA token to header if present
+    if (recaptchaToken) {
+      headers['X-Goog-Recaptcha-Token'] = recaptchaToken;
+    }
     
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoStartImage`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(req.body)  // ← Send FULL body INCLUDING recaptchaToken!
+      body: JSON.stringify(bodyWithoutRecaptcha)  // Send body WITHOUT recaptchaToken
     });
 
     const data = await getJson(response, req);
