@@ -133,7 +133,8 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     // Check body for recaptcha
     if (requestBody.recaptchaToken) {
         recaptchaToken = requestBody.recaptchaToken;
-        delete requestBody.recaptchaToken; // MUST REMOVE from body, Google API rejects unknown fields
+        // Keep it in body for potential API compatibility, but also use for headers
+        // delete requestBody.recaptchaToken; 
     }
 
     const headers = buildGoogleHeaders(req, authToken, recaptchaToken);
@@ -187,7 +188,8 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
 
     if (requestBody.recaptchaToken) {
         recaptchaToken = requestBody.recaptchaToken;
-        delete requestBody.recaptchaToken; // MUST REMOVE from body
+        // Keep it in body for potential API compatibility
+        // delete requestBody.recaptchaToken; 
     }
 
     const headers = buildGoogleHeaders(req, authToken, recaptchaToken);
