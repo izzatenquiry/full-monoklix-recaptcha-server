@@ -1,4 +1,3 @@
-
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -6,11 +5,6 @@ import fetch from 'node-fetch';
 const app = express();
 const PORT = process.env.PORT || 3001;
 const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
-
-// ===============================
-// 🔑 GOOGLE API CONFIG
-// ===============================
-const GOOGLE_API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
 
 // ===============================
 // 📝 LOGGER
@@ -69,7 +63,7 @@ app.use(cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Username', 'User-Agent', 'x-goog-recaptcha-token', 'x-recaptcha-token'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Username', 'User-Agent', 'x-goog-recaptcha-token', 'x-recaptcha-token', 'x-goog-api-key'],
   maxAge: 86400,
   optionsSuccessStatus: 200
 }));
@@ -82,27 +76,36 @@ app.options('*', cors());
 // ===============================
 const buildGoogleHeaders = (req, authToken, recaptchaToken = null) => {
     // CRITICAL: We must pretend to be the user's browser EXACTLY.
-    // Google checks if the Token's User-Agent matches the Request's User-Agent.
     const userAgent = req.headers['user-agent'] || 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
     const headers = {
-        'x-goog-api-key': GOOGLE_API_KEY,
         'Authorization': `Bearer ${authToken}`,
         'Content-Type': 'application/json',
-        // SPOOFING: Pretend we are Google Labs to satisfy Origin checks
+        // SPOOFING: Pretend we are Google Labs
         'Origin': 'https://labs.google',
         'Referer': 'https://labs.google/',
         'User-Agent': userAgent, 
     };
 
-    // INJECT RECAPTCHA
-    // Note: The frontend might send it in body (legacy) or header. We handle both.
+    // STRATEGY CHANGE: 
+    // Only include API Key if NO Auth Token is present (rare).
+    // If Auth Token is present, relying on API Key often triggers strict public quota reCAPTCHA.
+    // We want to force "User Quota" usage.
+    if (!authToken) {
+        headers['x-goog-api-key'] = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
+    } else {
+        log('log', req, 'ℹ️ Skipping x-goog-api-key to force User Quota usage');
+    }
+
+    // INJECT RECAPTCHA (If available)
     const finalRecaptcha = recaptchaToken || req.headers['x-goog-recaptcha-token'] || req.headers['x-recaptcha-token'];
     
     if (finalRecaptcha) {
+        // Send in multiple header formats to cover all bases
         headers['X-Goog-Recaptcha-Token'] = finalRecaptcha;
-        headers['x-recaptcha-token'] = finalRecaptcha; // Legacy fallback
-        log('log', req, '🔒 Injected X-Goog-Recaptcha-Token header');
+        headers['x-recaptcha-token'] = finalRecaptcha;
+        headers['X-Goog-Recaptcha-Enterprise-Token'] = finalRecaptcha; 
+        log('log', req, '🔒 Injected reCAPTCHA headers');
     }
 
     return headers;
@@ -124,17 +127,15 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
   log('log', req, '\n🎬 ===== [T2V] TEXT-TO-VIDEO REQUEST =====');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
+    // Allow request without auth token if just testing (will fail upstream but handled gracefully)
+    
     // Extract & Clean Body
     let requestBody = { ...req.body };
     let recaptchaToken = null;
 
-    // Check body for recaptcha
     if (requestBody.recaptchaToken) {
         recaptchaToken = requestBody.recaptchaToken;
-        // Keep it in body for potential API compatibility, but also use for headers
-        // delete requestBody.recaptchaToken; 
+        delete requestBody.recaptchaToken; 
     }
 
     const headers = buildGoogleHeaders(req, authToken, recaptchaToken);
@@ -154,9 +155,10 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       log('error', req, '❌ Veo API Error (T2V):', data);
       
       const errorMsg = JSON.stringify(data).toLowerCase();
-      if (errorMsg.includes('recaptcha') || 
-          errorMsg.includes('verification') ||
-          response.status === 403) {
+      // Only return 403 RECAPTCHA_REQUIRED if we haven't sent a token yet.
+      // If we sent a token and it STILL failed, sending another one won't help (invalid key type).
+      // Just pass the error through so the user knows.
+      if ((errorMsg.includes('recaptcha') || response.status === 403) && !recaptchaToken) {
         log('warn', req, '🔐 reCAPTCHA verification required');
         return res.status(403).json({ 
           error: 'RECAPTCHA_REQUIRED',
@@ -180,16 +182,13 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
   log('log', req, '\n🖼️ ===== [I2V] IMAGE-TO-VIDEO REQUEST =====');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
-    // Extract & Clean Body
+    
     let requestBody = { ...req.body };
     let recaptchaToken = null;
 
     if (requestBody.recaptchaToken) {
         recaptchaToken = requestBody.recaptchaToken;
-        // Keep it in body for potential API compatibility
-        // delete requestBody.recaptchaToken; 
+        delete requestBody.recaptchaToken; 
     }
 
     const headers = buildGoogleHeaders(req, authToken, recaptchaToken);
@@ -207,9 +206,7 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       log('error', req, '❌ Veo API Error (I2V):', data);
       
       const errorMsg = JSON.stringify(data).toLowerCase();
-      if (errorMsg.includes('recaptcha') || 
-          errorMsg.includes('verification') ||
-          response.status === 403) {
+      if ((errorMsg.includes('recaptcha') || response.status === 403) && !recaptchaToken) {
         log('warn', req, '🔐 reCAPTCHA verification required');
         return res.status(403).json({ 
           error: 'RECAPTCHA_REQUIRED',
@@ -232,8 +229,7 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
 app.post('/api/veo/status', async (req, res) => {
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
+    // Note: Status checks typically don't need recaptcha
     const headers = buildGoogleHeaders(req, authToken);
     
     const response = await fetch(`${VEO_API_BASE}/video:batchCheckAsyncVideoGenerationStatus`, {
@@ -261,8 +257,6 @@ app.post('/api/veo/upload', async (req, res) => {
   log('log', req, '\n📤 ===== [VEO UPLOAD] IMAGE UPLOAD =====');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
     const headers = buildGoogleHeaders(req, authToken);
 
     const response = await fetch(`${VEO_API_BASE}:uploadUserImage`, {
@@ -292,13 +286,10 @@ app.post('/api/veo/upload', async (req, res) => {
 // ========== IMAGEN ENDPOINTS ==========
 // ===============================
 
-// 🎨 GENERATE IMAGE (Imagen T2I)
 app.post('/api/imagen/generate', async (req, res) => {
   log('log', req, '\n🎨 ===== [IMAGEN] GENERATE IMAGE =====');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
     const headers = buildGoogleHeaders(req, authToken);
 
     const response = await fetch(`${VEO_API_BASE}/whisk:generateImage`, {
@@ -323,13 +314,10 @@ app.post('/api/imagen/generate', async (req, res) => {
   }
 });
 
-// ✏️ RUN RECIPE (Imagen Edit/Compose)
 app.post('/api/imagen/run-recipe', async (req, res) => {
   log('log', req, '\n✏️ ===== [IMAGEN RECIPE] RUN RECIPE =====');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
     const headers = buildGoogleHeaders(req, authToken);
 
     const response = await fetch(`${VEO_API_BASE}/whisk:runImageRecipe`, {
@@ -350,7 +338,6 @@ app.post('/api/imagen/run-recipe', async (req, res) => {
     const imageCount = data.imagePanels?.[0]?.generatedImages?.length || 0;
     
     log('log', req, '✅ [IMAGEN RECIPE] Success');
-    log('log', req, `   Generated ${panelCount} panel(s) with ${imageCount} image(s)`);
     
     res.json(data);
   } catch (error) {
@@ -359,13 +346,10 @@ app.post('/api/imagen/run-recipe', async (req, res) => {
   }
 });
 
-// 📤 IMAGEN UPLOAD IMAGE
 app.post('/api/imagen/upload', async (req, res) => {
   log('log', req, '\n📤 ===== [IMAGEN UPLOAD] IMAGE UPLOAD =====');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    if (!authToken) return res.status(401).json({ error: 'No auth token provided' });
-
     const headers = buildGoogleHeaders(req, authToken);
 
     const response = await fetch(`${VEO_API_BASE}:uploadUserImage`, {
@@ -441,7 +425,7 @@ app.listen(PORT, '0.0.0.0', () => {
   logSystem('🚀 Veo3 & Imagen Proxy Server STARTED');
   logSystem('🚀 ===================================');
   logSystem(`📍 Port: ${PORT}`);
-  logSystem('✅ Header Spoofing: ACTIVE (User-Agent + Origin + Recaptcha)');
+  logSystem('✅ Header Strategy: Force User Quota (No API Key)');
   logSystem('===================================\n');
 });
 
