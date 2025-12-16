@@ -69,7 +69,7 @@ app.use(cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Username', 'User-Agent', 'x-goog-recaptcha-token'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Username', 'User-Agent', 'x-goog-recaptcha-token', 'x-recaptcha-token'],
   maxAge: 86400,
   optionsSuccessStatus: 200
 }));
@@ -97,7 +97,7 @@ const buildGoogleHeaders = (req, authToken, recaptchaToken = null) => {
 
     // INJECT RECAPTCHA
     // Note: The frontend might send it in body (legacy) or header. We handle both.
-    const finalRecaptcha = recaptchaToken || req.headers['x-goog-recaptcha-token'];
+    const finalRecaptcha = recaptchaToken || req.headers['x-goog-recaptcha-token'] || req.headers['x-recaptcha-token'];
     
     if (finalRecaptcha) {
         headers['X-Goog-Recaptcha-Token'] = finalRecaptcha;
@@ -130,9 +130,10 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     let requestBody = { ...req.body };
     let recaptchaToken = null;
 
+    // Check body for recaptcha
     if (requestBody.recaptchaToken) {
         recaptchaToken = requestBody.recaptchaToken;
-        delete requestBody.recaptchaToken; // MUST REMOVE from body
+        delete requestBody.recaptchaToken; // MUST REMOVE from body, Google API rejects unknown fields
     }
 
     const headers = buildGoogleHeaders(req, authToken, recaptchaToken);
@@ -151,9 +152,9 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     if (!response.ok) {
       log('error', req, '❌ Veo API Error (T2V):', data);
       
-      const errorMsg = data.error?.message || data.message || '';
-      if (errorMsg.toLowerCase().includes('recaptcha') || 
-          errorMsg.toLowerCase().includes('verification') ||
+      const errorMsg = JSON.stringify(data).toLowerCase();
+      if (errorMsg.includes('recaptcha') || 
+          errorMsg.includes('verification') ||
           response.status === 403) {
         log('warn', req, '🔐 reCAPTCHA verification required');
         return res.status(403).json({ 
@@ -203,9 +204,9 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
     if (!response.ok) {
       log('error', req, '❌ Veo API Error (I2V):', data);
       
-      const errorMsg = data.error?.message || data.message || '';
-      if (errorMsg.toLowerCase().includes('recaptcha') || 
-          errorMsg.toLowerCase().includes('verification') ||
+      const errorMsg = JSON.stringify(data).toLowerCase();
+      if (errorMsg.includes('recaptcha') || 
+          errorMsg.includes('verification') ||
           response.status === 403) {
         log('warn', req, '🔐 reCAPTCHA verification required');
         return res.status(403).json({ 
@@ -441,3 +442,4 @@ app.listen(PORT, '0.0.0.0', () => {
   logSystem('✅ Header Spoofing: ACTIVE (User-Agent + Origin + Recaptcha)');
   logSystem('===================================\n');
 });
+
