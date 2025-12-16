@@ -1,3 +1,4 @@
+
 import express from 'express';
 import cors from 'cors';
 import fetch from 'node-fetch';
@@ -140,23 +141,7 @@ async function verifyRecaptchaWithOAuth(recaptchaToken, authToken, expectedActio
 // 🧩 MIDDLEWARE - APPLE FIX
 // ===============================
 app.use(cors({
-  origin: function(origin, callback) {
-    const allowedOrigins = [
-      'https://app.monoklix.com',
-      'https://app2.monoklix.com',
-      'https://dev.monoklix.com',
-      'https://dev1.monoklix.com',
-      'https://apple.monoklix.com',
-      'http://localhost:3000',
-      'http://localhost:3001'
-    ];
-    
-    if (!origin || allowedOrigins.includes(origin)) {
-      callback(null, true);
-    } else {
-      callback(new Error('CORS not allowed'));
-    }
-  },
+  origin: true, // Allow any origin
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Username'],
@@ -419,6 +404,7 @@ app.post('/api/veo/upload', async (req, res) => {
     }
 
     const mediaId = data.mediaGenerationId?.mediaGenerationId || data.mediaId;
+    
     log('log', req, '✅ [VEO UPLOAD] Success - MediaId:', mediaId);
     log('log', req, '=========================================\n');
     res.json(data);
