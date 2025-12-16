@@ -11,7 +11,7 @@ const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
 // ===============================
 const GOOGLE_API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
 const PROJECT_ID = 'gen-lang-client-0426593366';
-const RECAPTCHA_SITE_KEY = '6Lf29SwsAAAAANT1f-p_ASlaAFqNyv53E3bgxoV9';
+const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
 
 // ===============================
 // 🔐 AUTH STRATEGY (FROM HAR ANALYSIS)
