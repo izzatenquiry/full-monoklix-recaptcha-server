@@ -93,12 +93,15 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // Pass the body directly (including recaptchaToken if present)
-    // Do NOT validate locally. Let Google Veo API validate it.
-    const requestBody = req.body;
+    // Extract recaptchaToken if present and remove it from body
+    let requestBody = { ...req.body };
+    const recaptchaHeaders = {};
 
     if (requestBody.recaptchaToken) {
-        log('log', req, '🔒 reCAPTCHA token detected in request. Forwarding to Google...');
+        log('log', req, '🔒 reCAPTCHA token detected. Moving to headers...');
+        recaptchaHeaders['X-Goog-Recaptcha-Token'] = requestBody.recaptchaToken;
+        recaptchaHeaders['X-Recaptcha-Token'] = requestBody.recaptchaToken; // Fallback
+        delete requestBody.recaptchaToken; // Remove from body to avoid 400 Bad Request
     }
 
     log('log', req, '📤 Forwarding to Veo API...');
@@ -107,7 +110,8 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
       'Origin': 'https://labs.google',
-      'Referer': 'https://labs.google/'
+      'Referer': 'https://labs.google/',
+      ...recaptchaHeaders
     };
 
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoText`, {
@@ -156,18 +160,23 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // Pass the body directly (including recaptchaToken if present)
-    const requestBody = req.body;
+    // Extract recaptchaToken if present and remove it from body
+    let requestBody = { ...req.body };
+    const recaptchaHeaders = {};
 
     if (requestBody.recaptchaToken) {
-        log('log', req, '🔒 reCAPTCHA token detected in request. Forwarding to Google...');
+        log('log', req, '🔒 reCAPTCHA token detected. Moving to headers...');
+        recaptchaHeaders['X-Goog-Recaptcha-Token'] = requestBody.recaptchaToken;
+        recaptchaHeaders['X-Recaptcha-Token'] = requestBody.recaptchaToken; // Fallback
+        delete requestBody.recaptchaToken; // Remove from body to avoid 400 Bad Request
     }
 
     const headers = {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
       'Origin': 'https://labs.google',
-      'Referer': 'https://labs.google/'
+      'Referer': 'https://labs.google/',
+      ...recaptchaHeaders
     };
     
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoStartImage`, {
@@ -519,4 +528,3 @@ app.listen(PORT, '0.0.0.0', () => {
   logSystem('   POST /api/imagen/upload');
   logSystem('===================================\n');
 });
-
