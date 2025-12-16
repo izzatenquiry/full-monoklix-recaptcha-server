@@ -11,7 +11,6 @@ const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
 // ===============================
 const PROJECT_ID = 'gen-lang-client-0426593366';
 const RECAPTCHA_SITE_KEY = '6Lf29SwsAAAAANT1f-p_ASlaAFqNyv53E3bgxoV9';
-const RECAPTCHA_SECRET_KEY = '6Lf29SwsAAAAAPknDGsHMgltL3HLO4A3rTtTQYgJ';
 
 // ===============================
 // 📝 LOGGER
@@ -23,11 +22,9 @@ const log = (level, req, ...messages) => {
   const username = req ? (req.headers['x-user-username'] || 'anonymous') : 'SYSTEM';
   const prefix = `[${timestamp}] [${username}]`;
 
-  // Stringify objects for better readability
   const processedMessages = messages.map(msg => {
     if (typeof msg === 'object' && msg !== null) {
       try {
-        // Truncate long base64 strings in logs
         const tempMsg = JSON.parse(JSON.stringify(msg));
         if (tempMsg?.imageInput?.rawImageBytes?.length > 100) {
             tempMsg.imageInput.rawImageBytes = tempMsg.imageInput.rawImageBytes.substring(0, 50) + '...[TRUNCATED]';
@@ -50,8 +47,6 @@ const log = (level, req, ...messages) => {
   }
 };
 
-
-// A helper to safely parse JSON from a response
 async function getJson(response, req) {
     const text = await response.text();
     try {
@@ -68,29 +63,32 @@ async function getJson(response, req) {
 }
 
 // ===============================
-// 🔐 RECAPTCHA ENTERPRISE VERIFICATION
+// 🔐 RECAPTCHA ENTERPRISE WITH OAUTH
 // ===============================
 /**
- * Validates reCAPTCHA Enterprise token with Google
- * This uses the Enterprise API, NOT the v2/v3 verification endpoint!
+ * Validates reCAPTCHA Enterprise using OAuth token
+ * SAME authentication method as VEO API - NO separate API key needed!
  */
-async function verifyRecaptchaEnterprise(token, expectedAction = 'veo_generate') {
-  if (!token) {
-    return { success: false, error: 'No token provided' };
+async function verifyRecaptchaWithOAuth(recaptchaToken, authToken, expectedAction = 'veo_generate') {
+  if (!recaptchaToken || !authToken) {
+    return { success: false, error: 'Missing token(s)' };
   }
   
   try {
-    log('log', null, `🔐 [reCAPTCHA] Validating token for action: ${expectedAction}`);
+    log('log', null, `🔐 [reCAPTCHA] Validating with OAuth token for action: ${expectedAction}`);
     
-    // Enterprise API endpoint - CRITICAL: Use this endpoint!
-    const url = `https://recaptchaenterprise.googleapis.com/v1/projects/${PROJECT_ID}/assessments?key=${RECAPTCHA_SECRET_KEY}`;
+    // Uses OAuth token in Authorization header - NO API key in URL!
+    const url = `https://recaptchaenterprise.googleapis.com/v1/projects/${PROJECT_ID}/assessments`;
     
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${authToken}` // ← Same OAuth token as VEO!
+      },
       body: JSON.stringify({
         event: {
-          token: token,
+          token: recaptchaToken,
           expectedAction: expectedAction,
           siteKey: RECAPTCHA_SITE_KEY,
         }
@@ -99,7 +97,7 @@ async function verifyRecaptchaEnterprise(token, expectedAction = 'veo_generate')
     
     if (!response.ok) {
       const errorText = await response.text();
-      log('error', null, '❌ [reCAPTCHA] Validation request failed:', response.status, errorText);
+      log('error', null, '❌ [reCAPTCHA] Validation failed:', response.status, errorText);
       return { success: false, error: `HTTP ${response.status}: ${errorText}` };
     }
     
@@ -111,48 +109,29 @@ async function verifyRecaptchaEnterprise(token, expectedAction = 'veo_generate')
       score: assessment.riskAnalysis?.score
     });
     
-    // Step 1: Check if token is valid
     if (!assessment.tokenProperties?.valid) {
-      log('error', null, '❌ [reCAPTCHA] Token invalid:', assessment.tokenProperties?.invalidReason);
-      return { 
-        success: false, 
-        error: 'Invalid token',
-        reason: assessment.tokenProperties?.invalidReason 
-      };
+      log('error', null, '❌ [reCAPTCHA] Token invalid');
+      return { success: false, error: 'Invalid token' };
     }
     
-    // Step 2: Check action matches
     if (assessment.tokenProperties?.action !== expectedAction) {
-      log('error', null, `❌ [reCAPTCHA] Action mismatch! Expected: ${expectedAction}, Got: ${assessment.tokenProperties?.action}`);
-      return { 
-        success: false, 
-        error: 'Action mismatch' 
-      };
+      log('error', null, `❌ [reCAPTCHA] Action mismatch!`);
+      return { success: false, error: 'Action mismatch' };
     }
     
-    // Step 3: Check risk score (0.0 = bot, 1.0 = human)
     const score = assessment.riskAnalysis?.score || 0;
-    const THRESHOLD = 0.3; // Lenient threshold for VEO3
+    const THRESHOLD = 0.3;
     
     if (score < THRESHOLD) {
-      log('warn', null, `⚠️ [reCAPTCHA] Score too low: ${score} (threshold: ${THRESHOLD})`);
-      return { 
-        success: false, 
-        error: 'Score too low',
-        score: score,
-        threshold: THRESHOLD 
-      };
+      log('warn', null, `⚠️ [reCAPTCHA] Score too low: ${score}`);
+      return { success: false, error: 'Score too low', score, threshold: THRESHOLD };
     }
     
-    log('log', null, `✅ [reCAPTCHA] Validation PASSED! Score: ${score}`);
-    return { 
-      success: true, 
-      score: score,
-      action: assessment.tokenProperties?.action
-    };
+    log('log', null, `✅ [reCAPTCHA] PASSED! Score: ${score}`);
+    return { success: true, score, action: assessment.tokenProperties?.action };
     
   } catch (error) {
-    log('error', null, '❌ [reCAPTCHA] Validation error:', error);
+    log('error', null, '❌ [reCAPTCHA] Error:', error);
     return { success: false, error: error.message };
   }
 }
@@ -162,7 +141,6 @@ async function verifyRecaptchaEnterprise(token, expectedAction = 'veo_generate')
 // ===============================
 app.use(cors({
   origin: function(origin, callback) {
-    // Allow requests from your domains
     const allowedOrigins = [
       'https://app.monoklix.com',
       'https://app2.monoklix.com',
@@ -187,8 +165,6 @@ app.use(cors({
 }));
 
 app.use(express.json({ limit: '50mb' }));
-
-// Apple devices preflight fix
 app.options('*', cors());
 
 // ===============================
@@ -202,7 +178,7 @@ app.get('/health', (req, res) => {
 // ========== VEO3 ENDPOINTS ==========
 // ===============================
 
-// 🎬 TEXT-TO-VIDEO (UPDATED WITH RECAPTCHA VALIDATION)
+// 🎬 TEXT-TO-VIDEO
 app.post('/api/veo/generate-t2v', async (req, res) => {
   log('log', req, '\n🎬 ===== [T2V] TEXT-TO-VIDEO REQUEST =====');
   try {
@@ -212,15 +188,14 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // Extract reCAPTCHA token from request body
     const recaptchaToken = req.body.recaptchaToken;
     const bodyWithoutRecaptcha = { ...req.body };
     delete bodyWithoutRecaptcha.recaptchaToken;
 
-    // **CRITICAL**: Validate reCAPTCHA token with Google BEFORE forwarding to VEO API
+    // Validate reCAPTCHA using OAuth token
     if (recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token provided, validating with Google...');
-      const validation = await verifyRecaptchaEnterprise(recaptchaToken, 'veo_generate');
+      log('log', req, '🔒 reCAPTCHA token provided, validating with OAuth...');
+      const validation = await verifyRecaptchaWithOAuth(recaptchaToken, authToken, 'veo_generate');
       
       if (!validation.success) {
         log('error', req, '❌ reCAPTCHA validation failed:', validation.error);
@@ -238,14 +213,11 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
         });
       }
       
-      log('log', req, `✅ reCAPTCHA validation passed! Score: ${validation.score}`);
+      log('log', req, `✅ reCAPTCHA validated with OAuth! Score: ${validation.score}`);
     }
 
     log('log', req, '📤 Forwarding to Veo API...');
-    log('log', req, '📦 Request body:', bodyWithoutRecaptcha);
 
-    // Build headers - NOTE: We don't forward the reCAPTCHA token to VEO API
-    // because we already validated it with Google
     const headers = {
       'Authorization': `Bearer ${authToken}`,
       'Content-Type': 'application/json',
@@ -265,7 +237,6 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     if (!response.ok) {
       log('error', req, '❌ Veo API Error (T2V):', data);
       
-      // Check if error is recaptcha-related (should not happen after validation)
       const errorMsg = data.error?.message || data.message || '';
       if (errorMsg.toLowerCase().includes('recaptcha') || 
           errorMsg.toLowerCase().includes('verification') ||
@@ -290,7 +261,7 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
   }
 });
 
-// 🖼️ IMAGE-TO-VIDEO (UPDATED WITH RECAPTCHA VALIDATION)
+// 🖼️ IMAGE-TO-VIDEO
 app.post('/api/veo/generate-i2v', async (req, res) => {
   log('log', req, '\n🖼️ ===== [I2V] IMAGE-TO-VIDEO REQUEST =====');
   try {
@@ -300,15 +271,14 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // Extract reCAPTCHA token
     const recaptchaToken = req.body.recaptchaToken;
     const bodyWithoutRecaptcha = { ...req.body };
     delete bodyWithoutRecaptcha.recaptchaToken;
 
-    // **CRITICAL**: Validate reCAPTCHA token with Google BEFORE forwarding to VEO API
+    // Validate reCAPTCHA using OAuth token
     if (recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token provided, validating with Google...');
-      const validation = await verifyRecaptchaEnterprise(recaptchaToken, 'veo_generate');
+      log('log', req, '🔒 reCAPTCHA token provided, validating with OAuth...');
+      const validation = await verifyRecaptchaWithOAuth(recaptchaToken, authToken, 'veo_generate');
       
       if (!validation.success) {
         log('error', req, '❌ reCAPTCHA validation failed:', validation.error);
@@ -326,14 +296,8 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
         });
       }
       
-      log('log', req, `✅ reCAPTCHA validation passed! Score: ${validation.score}`);
+      log('log', req, `✅ reCAPTCHA validated with OAuth! Score: ${validation.score}`);
     }
-
-    if (bodyWithoutRecaptcha.requests?.[0]?.startImage?.mediaId) {
-      log('log', req, '📤 Has startImage with mediaId:', bodyWithoutRecaptcha.requests[0].startImage.mediaId);
-    }
-    log('log', req, '📤 Prompt:', bodyWithoutRecaptcha.requests?.[0]?.textInput?.prompt?.substring(0, 100) + '...');
-    log('log', req, '📤 Aspect ratio:', bodyWithoutRecaptcha.requests?.[0]?.aspectRatio);
 
     const headers = {
       'Authorization': `Bearer ${authToken}`,
@@ -354,7 +318,6 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
     if (!response.ok) {
       log('error', req, '❌ Veo API Error (I2V):', data);
       
-      // Check for recaptcha requirement
       const errorMsg = data.error?.message || data.message || '';
       if (errorMsg.toLowerCase().includes('recaptcha') || 
           errorMsg.toLowerCase().includes('verification') ||
@@ -677,12 +640,12 @@ app.listen(PORT, '0.0.0.0', () => {
   logSystem(`📍 Health: http://localhost:${PORT}/health`);
   logSystem('✅ CORS: Apple Fix Enabled');
   logSystem('🔧 Debug logging: ENABLED');
-  logSystem('🔐 reCAPTCHA Enterprise: ENABLED ✅');
+  logSystem('🔐 reCAPTCHA: OAuth-based validation ✅');
   logSystem(`🔐 Project ID: ${PROJECT_ID}`);
   logSystem('===================================\n');
   logSystem('📋 VEO3 Endpoints:');
-  logSystem('   POST /api/veo/generate-t2v (reCAPTCHA validated ✅)');
-  logSystem('   POST /api/veo/generate-i2v (reCAPTCHA validated ✅)');
+  logSystem('   POST /api/veo/generate-t2v (OAuth reCAPTCHA ✅)');
+  logSystem('   POST /api/veo/generate-i2v (OAuth reCAPTCHA ✅)');
   logSystem('   POST /api/veo/status');
   logSystem('   POST /api/veo/upload');
   logSystem('   GET  /api/veo/download-video');
