@@ -8,12 +8,6 @@ const PORT = process.env.PORT || 3001;
 const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
 
 // ===============================
-// 🔐 RECAPTCHA ENTERPRISE CREDENTIALS
-// ===============================
-const PROJECT_ID = 'gen-lang-client-0426593366';
-const RECAPTCHA_SITE_KEY = '6Lf29SwsAAAAANT1f-p_ASlaAFqNyv53E3bgxoV9';
-
-// ===============================
 // 📝 LOGGER
 // ===============================
 const log = (level, req, ...messages) => {
@@ -64,80 +58,6 @@ async function getJson(response, req) {
 }
 
 // ===============================
-// 🔐 RECAPTCHA ENTERPRISE WITH OAUTH
-// ===============================
-/**
- * Validates reCAPTCHA Enterprise using OAuth token
- * SAME authentication method as VEO API - NO separate API key needed!
- */
-async function verifyRecaptchaWithOAuth(recaptchaToken, authToken, expectedAction = 'veo_generate') {
-  if (!recaptchaToken || !authToken) {
-    return { success: false, error: 'Missing token(s)' };
-  }
-  
-  try {
-    log('log', null, `🔐 [reCAPTCHA] Validating with OAuth token for action: ${expectedAction}`);
-    
-    // Uses OAuth token in Authorization header - NO API key in URL!
-    const url = `https://recaptchaenterprise.googleapis.com/v1/projects/${PROJECT_ID}/assessments`;
-    
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${authToken}` // ← Same OAuth token as VEO!
-      },
-      body: JSON.stringify({
-        event: {
-          token: recaptchaToken,
-          expectedAction: expectedAction,
-          siteKey: RECAPTCHA_SITE_KEY,
-        }
-      })
-    });
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      log('error', null, '❌ [reCAPTCHA] Validation failed:', response.status, errorText);
-      return { success: false, error: `HTTP ${response.status}: ${errorText}` };
-    }
-    
-    const assessment = await response.json();
-    
-    log('log', null, '🔐 [reCAPTCHA] Assessment:', {
-      valid: assessment.tokenProperties?.valid,
-      action: assessment.tokenProperties?.action,
-      score: assessment.riskAnalysis?.score
-    });
-    
-    if (!assessment.tokenProperties?.valid) {
-      log('error', null, '❌ [reCAPTCHA] Token invalid');
-      return { success: false, error: 'Invalid token' };
-    }
-    
-    if (assessment.tokenProperties?.action !== expectedAction) {
-      log('error', null, `❌ [reCAPTCHA] Action mismatch!`);
-      return { success: false, error: 'Action mismatch' };
-    }
-    
-    const score = assessment.riskAnalysis?.score || 0;
-    const THRESHOLD = 0.3;
-    
-    if (score < THRESHOLD) {
-      log('warn', null, `⚠️ [reCAPTCHA] Score too low: ${score}`);
-      return { success: false, error: 'Score too low', score, threshold: THRESHOLD };
-    }
-    
-    log('log', null, `✅ [reCAPTCHA] PASSED! Score: ${score}`);
-    return { success: true, score, action: assessment.tokenProperties?.action };
-    
-  } catch (error) {
-    log('error', null, '❌ [reCAPTCHA] Error:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-// ===============================
 // 🧩 MIDDLEWARE - APPLE FIX
 // ===============================
 app.use(cors({
@@ -173,32 +93,12 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    const recaptchaToken = req.body.recaptchaToken;
-    const bodyWithoutRecaptcha = { ...req.body };
-    delete bodyWithoutRecaptcha.recaptchaToken;
+    // Pass the body directly (including recaptchaToken if present)
+    // Do NOT validate locally. Let Google Veo API validate it.
+    const requestBody = req.body;
 
-    // Validate reCAPTCHA using OAuth token
-    if (recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token provided, validating with OAuth...');
-      const validation = await verifyRecaptchaWithOAuth(recaptchaToken, authToken, 'veo_generate');
-      
-      if (!validation.success) {
-        log('error', req, '❌ reCAPTCHA validation failed:', validation.error);
-        return res.status(403).json({
-          error: 'RECAPTCHA_REQUIRED',
-          message: 'reCAPTCHA verification failed',
-          originalError: {
-            error: {
-              code: 403,
-              message: 'reCAPTCHA evaluation failed',
-              status: 'PERMISSION_DENIED',
-              details: validation
-            }
-          }
-        });
-      }
-      
-      log('log', req, `✅ reCAPTCHA validated with OAuth! Score: ${validation.score}`);
+    if (requestBody.recaptchaToken) {
+        log('log', req, '🔒 reCAPTCHA token detected in request. Forwarding to Google...');
     }
 
     log('log', req, '📤 Forwarding to Veo API...');
@@ -213,7 +113,7 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoText`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(bodyWithoutRecaptcha)
+      body: JSON.stringify(requestBody)
     });
 
     const data = await getJson(response, req);
@@ -256,32 +156,11 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    const recaptchaToken = req.body.recaptchaToken;
-    const bodyWithoutRecaptcha = { ...req.body };
-    delete bodyWithoutRecaptcha.recaptchaToken;
+    // Pass the body directly (including recaptchaToken if present)
+    const requestBody = req.body;
 
-    // Validate reCAPTCHA using OAuth token
-    if (recaptchaToken) {
-      log('log', req, '🔒 reCAPTCHA token provided, validating with OAuth...');
-      const validation = await verifyRecaptchaWithOAuth(recaptchaToken, authToken, 'veo_generate');
-      
-      if (!validation.success) {
-        log('error', req, '❌ reCAPTCHA validation failed:', validation.error);
-        return res.status(403).json({
-          error: 'RECAPTCHA_REQUIRED',
-          message: 'reCAPTCHA verification failed',
-          originalError: {
-            error: {
-              code: 403,
-              message: 'reCAPTCHA evaluation failed',
-              status: 'PERMISSION_DENIED',
-              details: validation
-            }
-          }
-        });
-      }
-      
-      log('log', req, `✅ reCAPTCHA validated with OAuth! Score: ${validation.score}`);
+    if (requestBody.recaptchaToken) {
+        log('log', req, '🔒 reCAPTCHA token detected in request. Forwarding to Google...');
     }
 
     const headers = {
@@ -294,7 +173,7 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
     const response = await fetch(`${VEO_API_BASE}/video:batchAsyncGenerateVideoStartImage`, {
       method: 'POST',
       headers: headers,
-      body: JSON.stringify(bodyWithoutRecaptcha)
+      body: JSON.stringify(requestBody)
     });
 
     const data = await getJson(response, req);
@@ -626,12 +505,11 @@ app.listen(PORT, '0.0.0.0', () => {
   logSystem(`📍 Health: http://localhost:${PORT}/health`);
   logSystem('✅ CORS: Apple Fix Enabled');
   logSystem('🔧 Debug logging: ENABLED');
-  logSystem('🔐 reCAPTCHA: OAuth-based validation ✅');
-  logSystem(`🔐 Project ID: ${PROJECT_ID}`);
+  logSystem('⚠️ reCAPTCHA server-side validation: DISABLED (Passthrough mode)');
   logSystem('===================================\n');
   logSystem('📋 VEO3 Endpoints:');
-  logSystem('   POST /api/veo/generate-t2v (OAuth reCAPTCHA ✅)');
-  logSystem('   POST /api/veo/generate-i2v (OAuth reCAPTCHA ✅)');
+  logSystem('   POST /api/veo/generate-t2v (Pass-through reCAPTCHA ✅)');
+  logSystem('   POST /api/veo/generate-i2v (Pass-through reCAPTCHA ✅)');
   logSystem('   POST /api/veo/status');
   logSystem('   POST /api/veo/upload');
   logSystem('   GET  /api/veo/download-video');
@@ -641,3 +519,4 @@ app.listen(PORT, '0.0.0.0', () => {
   logSystem('   POST /api/imagen/upload');
   logSystem('===================================\n');
 });
+
