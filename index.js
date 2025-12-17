@@ -67,83 +67,6 @@ async function getJson(response, req) {
 }
 
 // ===============================
-// 🔐 RECAPTCHA VALIDATION
-// ===============================
-/**
- * CRITICAL: This validates reCAPTCHA token with Google's API
- * Uses Google's OFFICIAL site key from labs.google
- */
-async function validateRecaptchaToken(recaptchaToken, expectedAction = 'submit') {
-  if (!recaptchaToken) {
-    log('warn', null, '⚠️ No reCAPTCHA token provided');
-    return { valid: false, reason: 'NO_TOKEN' };
-  }
-
-  try {
-    log('log', null, `🔐 [reCAPTCHA] Validating token... (action: ${expectedAction})`);
-    
-    // Use Google's reCAPTCHA Enterprise API
-    const assessmentUrl = `https://recaptchaenterprise.googleapis.com/v1/projects/${PROJECT_ID}/assessments?key=${GOOGLE_API_KEY}`;
-    
-    const response = await fetch(assessmentUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        event: {
-          token: recaptchaToken,
-          siteKey: RECAPTCHA_SITE_KEY,
-          expectedAction: expectedAction
-        }
-      })
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      log('error', null, `❌ [reCAPTCHA] Validation failed. Status: ${response.status}`, errorText);
-      return { valid: false, reason: 'API_ERROR', details: errorText };
-    }
-
-    const assessment = await response.json();
-    
-    const isValid = assessment.tokenProperties?.valid === true;
-    const score = assessment.riskAnalysis?.score || 0;
-    const action = assessment.tokenProperties?.action;
-    
-    log('log', null, `🔐 [reCAPTCHA] Assessment:`, {
-      valid: isValid,
-      score: score.toFixed(2),
-      action: action,
-      expectedAction: expectedAction
-    });
-
-    if (!isValid) {
-      const reason = assessment.tokenProperties?.invalidReason || 'UNKNOWN';
-      log('error', null, `❌ [reCAPTCHA] Token invalid: ${reason}`);
-      return { 
-        valid: false, 
-        reason: 'INVALID_TOKEN',
-        details: reason
-      };
-    }
-
-    // Check score threshold (lenient for VEO)
-    const SCORE_THRESHOLD = 0.3;
-    if (score < SCORE_THRESHOLD) {
-      log('warn', null, `⚠️ [reCAPTCHA] Low score: ${score.toFixed(2)} (threshold: ${SCORE_THRESHOLD}) - proceeding anyway`);
-    }
-
-    log('log', null, `✅ [reCAPTCHA] Validation SUCCESS! Score: ${score.toFixed(2)}`);
-    return { valid: true, score: score, action: action };
-
-  } catch (error) {
-    log('error', null, '❌ [reCAPTCHA] Exception during validation:', error.message);
-    return { valid: false, reason: 'EXCEPTION', error: error.message };
-  }
-}
-
-// ===============================
 // 🧩 MIDDLEWARE
 // ===============================
 app.use(cors({
@@ -182,7 +105,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    recaptcha: 'enabled'
+    recaptcha: 'forwarding'
   });
 });
 
@@ -206,23 +129,9 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     let requestBody = { ...req.body };
     delete requestBody.recaptchaToken;
 
-    // 3. VALIDATE RECAPTCHA (MANDATORY)
+    // 3. ATTACH TOKEN (NO VALIDATION)
     if (recaptchaToken) {
-      log('log', req, '🔐 reCAPTCHA token found - validating...');
-      
-      const validation = await validateRecaptchaToken(recaptchaToken, 'submit');
-      
-      if (!validation.valid) {
-        log('error', req, '❌ reCAPTCHA validation failed:', validation);
-        return res.status(403).json({ 
-          error: 'RECAPTCHA_VALIDATION_FAILED',
-          message: 'reCAPTCHA verification failed',
-          details: validation,
-          requiresRecaptcha: true
-        });
-      }
-      
-      log('log', req, `✅ reCAPTCHA validated! Score: ${validation.score?.toFixed(2)}`);
+      log('log', req, '🔐 reCAPTCHA token found - forwarding to VEO...');
       
       // Add validated token to clientContext
       if (!requestBody.clientContext) {
@@ -294,21 +203,7 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
     delete requestBody.recaptchaToken;
 
     if (recaptchaToken) {
-      log('log', req, '🔐 reCAPTCHA token found - validating...');
-      
-      const validation = await validateRecaptchaToken(recaptchaToken, 'submit');
-      
-      if (!validation.valid) {
-        log('error', req, '❌ reCAPTCHA validation failed:', validation);
-        return res.status(403).json({ 
-          error: 'RECAPTCHA_VALIDATION_FAILED',
-          message: 'reCAPTCHA verification failed',
-          details: validation,
-          requiresRecaptcha: true
-        });
-      }
-      
-      log('log', req, `✅ reCAPTCHA validated! Score: ${validation.score?.toFixed(2)}`);
+      log('log', req, '🔐 reCAPTCHA token found - forwarding to VEO...');
       
       if (!requestBody.clientContext) {
         requestBody.clientContext = {};
@@ -590,11 +485,10 @@ app.listen(PORT, '0.0.0.0', () => {
   log('log', null, '╚═══════════════════════════════════════╝');
   log('log', null, `📍 Port: ${PORT}`);
   log('log', null, `📍 Health: http://localhost:${PORT}/health`);
-  log('log', null, '');
   log('log', null, '🔐 reCAPTCHA Configuration:');
   log('log', null, `   Site Key: ${RECAPTCHA_SITE_KEY}`);
   log('log', null, `   Project: ${PROJECT_ID}`);
-  log('log', null, `   Validation: ENABLED ✅`);
+  log('log', null, `   Validation: DISABLED (Forward-Only) ⏩`);
   log('log', null, '');
   log('log', null, '📋 Endpoints Ready:');
   log('log', null, '   VEO:    /api/veo/*');
