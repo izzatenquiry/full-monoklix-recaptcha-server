@@ -160,6 +160,7 @@ app.use(cors({
   origin: function(origin, callback) {
     const allowedOrigins = [
       'https://app.monoklix.com',
+      'https://aistudio.google.com',
       'https://app2.monoklix.com',
       'https://dev.monoklix.com',
       'https://dev1.monoklix.com',
