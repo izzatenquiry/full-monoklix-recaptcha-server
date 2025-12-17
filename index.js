@@ -4,66 +4,90 @@ import fetch from 'node-fetch';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
 
 // ===============================
-// 🔑 CONFIGURATION
+// ⚙️ CONFIG
 // ===============================
-const GOOGLE_API_KEY = 'AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY';
+const GOOGLE_API_KEY = process.env.GOOGLE_API_KEY || '';
+const VEO_API_BASE = 'https://aisandbox-pa.googleapis.com/v1';
+const RECAPTCHA_SITE_KEY = '6Lf29SwsAAAAANT1f-p_ASlaAFqNyv53E3bgxoV9';
 const PROJECT_ID = 'gen-lang-client-0426593366';
 
-// ✅ GUNA GOOGLE'S OFFICIAL SITE KEY (from labs.google)
-// This is the site key that Google VEO API expects!
-const RECAPTCHA_SITE_KEY = '6LdsFiUsAAAAAIjVDZcuLhaHiDn5nnHVXVRQGeMV';
-
 // ===============================
-// 📝 LOGGING FUNCTION
+// 🛠️ HELPERS
 // ===============================
-const log = (level, req, ...messages) => {
-  const timestamp = new Date().toLocaleString('sv-SE', {
-    timeZone: 'Asia/Kuala_Lumpur',
-  });
-  const username = req ? (req.headers['x-user-username'] || 'anonymous') : 'SYSTEM';
+const log = (level, req, ...args) => {
+  const timestamp = new Date().toISOString();
+  const username = req?.headers?.['x-user-username'] || 'unknown';
   const prefix = `[${timestamp}] [${username}]`;
-
-  const processedMessages = messages.map(msg => {
-    if (typeof msg === 'object' && msg !== null) {
-      try {
-        const tempMsg = JSON.parse(JSON.stringify(msg));
-        if (tempMsg?.imageInput?.rawImageBytes?.length > 100) {
-            tempMsg.imageInput.rawImageBytes = tempMsg.imageInput.rawImageBytes.substring(0, 50) + '...[TRUNCATED]';
-        }
-         if (tempMsg?.requests?.[0]?.textInput?.prompt?.length > 200) {
-            tempMsg.requests[0].textInput.prompt = tempMsg.requests[0].textInput.prompt.substring(0, 200) + '...[TRUNCATED]';
-        }
-        return JSON.stringify(tempMsg, null, 2);
-      } catch (e) {
-        return '[Unserializable Object]';
-      }
-    }
-    return msg;
-  });
-
+  
   if (level === 'error') {
-    console.error(prefix, ...processedMessages);
+    console.error(prefix, ...args);
+  } else if (level === 'warn') {
+    console.warn(prefix, ...args);
   } else {
-    console.log(prefix, ...processedMessages);
+    console.log(prefix, ...args);
   }
 };
 
-async function getJson(response, req) {
-    const text = await response.text();
-    try {
-        return JSON.parse(text);
-    } catch (e) {
-        log('error', req, `❌ Upstream API response is not valid JSON. Status: ${response.status}`);
-        log('error', req, `   Body: ${text}`);
-        return { 
-            error: 'Bad Gateway', 
-            message: 'The API returned an invalid (non-JSON) response.', 
-            details: text 
-        };
+const getJson = async (response, req) => {
+  const text = await response.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    log('warn', req, '⚠️ Non-JSON response:', text.substring(0, 200));
+    return { error: text };
+  }
+};
+
+async function validateRecaptchaToken(token, expectedAction) {
+  if (!token || typeof token !== 'string') {
+    log('warn', null, '⚠️ [reCAPTCHA] No token provided');
+    return { valid: false, reason: 'NO_TOKEN' };
+  }
+
+  try {
+    log('log', null, `🔐 [reCAPTCHA] Validating token for action: ${expectedAction}`);
+    
+    const assessmentUrl = `https://recaptchaenterprise.googleapis.com/v1/projects/${PROJECT_ID}/assessments?key=${GOOGLE_API_KEY}`;
+    
+    const requestBody = {
+      event: {
+        token: token,
+        expectedAction: expectedAction,
+        siteKey: RECAPTCHA_SITE_KEY
+      }
+    };
+
+    const response = await fetch(assessmentUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(requestBody)
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      log('error', null, `❌ [reCAPTCHA] HTTP ${response.status}:`, errorText);
+      return { valid: false, reason: 'HTTP_ERROR', status: response.status, message: errorText };
     }
+
+    const data = await response.json();
+    
+    if (!data.tokenProperties || !data.tokenProperties.valid) {
+      log('error', null, '❌ [reCAPTCHA] Token invalid:', data.tokenProperties?.invalidReason || 'unknown');
+      return { valid: false, reason: data.tokenProperties?.invalidReason || 'INVALID_TOKEN' };
+    }
+
+    const score = data.riskAnalysis?.score ?? 0;
+    const action = data.tokenProperties.action;
+
+    log('log', null, `✅ [reCAPTCHA] Token valid! Action: ${action}, Score: ${score.toFixed(2)}`);
+    return { valid: true, score: score, action: action };
+
+  } catch (error) {
+    log('error', null, '❌ [reCAPTCHA] Exception during validation:', error.message);
+    return { valid: false, reason: 'EXCEPTION', error: error.message };
+  }
 }
 
 // ===============================
@@ -105,7 +129,7 @@ app.get('/health', (req, res) => {
   res.json({ 
     status: 'ok', 
     timestamp: new Date().toISOString(),
-    recaptcha: 'forwarding'
+    recaptcha: 'enabled'
   });
 });
 
@@ -117,23 +141,33 @@ app.get('/health', (req, res) => {
 app.post('/api/veo/generate-t2v', async (req, res) => {
   log('log', req, '\n🎬 ===== [T2V] TEXT-TO-VIDEO REQUEST =====');
   try {
-    // 1. GET AUTH TOKEN
     const authToken = req.headers.authorization?.replace('Bearer ', '');
     if (!authToken) {
       log('error', req, '❌ No auth token provided');
       return res.status(401).json({ error: 'No auth token provided' });
     }
 
-    // 2. EXTRACT RECAPTCHA TOKEN
     const recaptchaToken = req.body.recaptchaToken;
     let requestBody = { ...req.body };
     delete requestBody.recaptchaToken;
 
-    // 3. ATTACH TOKEN (NO VALIDATION)
     if (recaptchaToken) {
-      log('log', req, '🔐 reCAPTCHA token found - forwarding to VEO...');
+      log('log', req, '🔐 reCAPTCHA token found - validating...');
       
-      // Add validated token to clientContext
+      const validation = await validateRecaptchaToken(recaptchaToken, 'submit');
+      
+      if (!validation.valid) {
+        log('error', req, '❌ reCAPTCHA validation failed:', validation);
+        return res.status(403).json({ 
+          error: 'RECAPTCHA_VALIDATION_FAILED',
+          message: 'reCAPTCHA verification failed',
+          details: validation,
+          requiresRecaptcha: true
+        });
+      }
+      
+      log('log', req, `✅ reCAPTCHA validated! Score: ${validation.score?.toFixed(2)}`);
+      
       if (!requestBody.clientContext) {
         requestBody.clientContext = {};
       }
@@ -142,7 +176,6 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
       log('warn', req, '⚠️ No reCAPTCHA token provided - request might fail');
     }
 
-    // 4. FORWARD TO VEO API
     log('log', req, '📤 Forwarding to VEO API...');
     
     const headers = {
@@ -165,7 +198,6 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
     if (!response.ok) {
       log('error', req, '❌ VEO API Error:', data);
       
-      // Check if reCAPTCHA is required
       const errorMsg = JSON.stringify(data).toLowerCase();
       if (errorMsg.includes('recaptcha') || response.status === 403) {
         log('warn', req, '🔐 Google requires reCAPTCHA verification');
@@ -203,7 +235,21 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
     delete requestBody.recaptchaToken;
 
     if (recaptchaToken) {
-      log('log', req, '🔐 reCAPTCHA token found - forwarding to VEO...');
+      log('log', req, '🔐 reCAPTCHA token found - validating...');
+      
+      const validation = await validateRecaptchaToken(recaptchaToken, 'submit');
+      
+      if (!validation.valid) {
+        log('error', req, '❌ reCAPTCHA validation failed:', validation);
+        return res.status(403).json({ 
+          error: 'RECAPTCHA_VALIDATION_FAILED',
+          message: 'reCAPTCHA verification failed',
+          details: validation,
+          requiresRecaptcha: true
+        });
+      }
+      
+      log('log', req, `✅ reCAPTCHA validated! Score: ${validation.score?.toFixed(2)}`);
       
       if (!requestBody.clientContext) {
         requestBody.clientContext = {};
@@ -436,6 +482,112 @@ app.post('/api/imagen/upload', async (req, res) => {
 });
 
 // ===============================
+// ========== NANOBANANA ENDPOINTS ==========
+// ===============================
+
+app.post('/api/nanobanana/generate', async (req, res) => {
+  log('log', req, '\n🍌 ===== [NANOBANANA] GENERATE =====');
+  try {
+    const authToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!authToken) {
+      return res.status(401).json({ error: 'No auth token provided' });
+    }
+
+    const response = await fetch(`${VEO_API_BASE}/whisk:generateImage`, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': GOOGLE_API_KEY,
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+        'Origin': 'https://labs.google',
+        'Referer': 'https://labs.google/'
+      },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await getJson(response, req);
+    
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    log('log', req, '✅ [NANOBANANA] Success');
+    res.json(data);
+  } catch (error) {
+    log('error', req, '❌ Server error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/nanobanana/run-recipe', async (req, res) => {
+  log('log', req, '\n🍌✏️ ===== [NANOBANANA] RUN RECIPE =====');
+  try {
+    const authToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!authToken) {
+      return res.status(401).json({ error: 'No auth token provided' });
+    }
+
+    const response = await fetch(`${VEO_API_BASE}/whisk:runImageRecipe`, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': GOOGLE_API_KEY,
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+        'Origin': 'https://labs.google',
+        'Referer': 'https://labs.google/'
+      },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await getJson(response, req);
+    
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+    
+    log('log', req, '✅ [NANOBANANA RECIPE] Success');
+    res.json(data);
+  } catch (error) {
+    log('error', req, '❌ Server error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/nanobanana/upload', async (req, res) => {
+  log('log', req, '\n🍌📤 ===== [NANOBANANA] UPLOAD =====');
+  try {
+    const authToken = req.headers.authorization?.replace('Bearer ', '');
+    if (!authToken) {
+      return res.status(401).json({ error: 'No auth token provided' });
+    }
+
+    const response = await fetch(`${VEO_API_BASE}:uploadUserImage`, {
+      method: 'POST',
+      headers: {
+        'x-goog-api-key': GOOGLE_API_KEY,
+        'Authorization': `Bearer ${authToken}`,
+        'Content-Type': 'application/json',
+        'Origin': 'https://labs.google',
+        'Referer': 'https://labs.google/'
+      },
+      body: JSON.stringify(req.body)
+    });
+
+    const data = await getJson(response, req);
+    
+    if (!response.ok) {
+      return res.status(response.status).json(data);
+    }
+
+    log('log', req, '✅ [NANOBANANA UPLOAD] Success');
+    res.json(data);
+  } catch (error) {
+    log('error', req, '❌ Server error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ===============================
 // 📥 DOWNLOAD VIDEO
 // ===============================
 app.get('/api/veo/download-video', async (req, res) => {
@@ -485,13 +637,15 @@ app.listen(PORT, '0.0.0.0', () => {
   log('log', null, '╚═══════════════════════════════════════╝');
   log('log', null, `📍 Port: ${PORT}`);
   log('log', null, `📍 Health: http://localhost:${PORT}/health`);
+  log('log', null, '');
   log('log', null, '🔐 reCAPTCHA Configuration:');
   log('log', null, `   Site Key: ${RECAPTCHA_SITE_KEY}`);
   log('log', null, `   Project: ${PROJECT_ID}`);
-  log('log', null, `   Validation: DISABLED (Forward-Only) ⏩`);
+  log('log', null, `   Validation: ENABLED ✅`);
   log('log', null, '');
   log('log', null, '📋 Endpoints Ready:');
-  log('log', null, '   VEO:    /api/veo/*');
-  log('log', null, '   IMAGEN: /api/imagen/*');
+  log('log', null, '   VEO:        /api/veo/*');
+  log('log', null, '   IMAGEN:     /api/imagen/*');
+  log('log', null, '   NANOBANANA: /api/nanobanana/* 🍌');
   log('log', null, '═══════════════════════════════════════\n');
 });
