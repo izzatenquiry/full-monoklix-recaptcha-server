@@ -77,7 +77,6 @@ async function validateRecaptchaToken(token, expectedAction) {
       return { valid: false, reason: data.tokenProperties?.invalidReason || 'INVALID_TOKEN' };
     }
 
-    // Periksa kalau action dlm token sama dengan apa yang kita minta
     if (data.tokenProperties.action !== expectedAction) {
         log('error', null, `❌ [reCAPTCHA] Action Mismatch: Got ${data.tokenProperties.action}, expected ${expectedAction}`);
         return { valid: false, reason: 'ACTION_MISMATCH' };
@@ -95,7 +94,14 @@ async function validateRecaptchaToken(token, expectedAction) {
 // ===============================
 // 🧩 MIDDLEWARE
 // ===============================
-app.use(cors());
+// FIX: Explicitly allow custom headers to fix CORS preflight block
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Recaptcha-Token', 'X-User-Username'],
+  credentials: true
+}));
+
 app.use(express.json({ limit: '50mb' }));
 
 // ===============================
@@ -106,19 +112,14 @@ app.post('/api/veo/generate-t2v', async (req, res) => {
   log('log', req, '🎬 [T2V] Processing Request...');
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
-    
-    // Tarik token dari body atau clientContext
     const recaptchaToken = req.body.recaptchaToken || req.body.clientContext?.recaptchaToken;
     let requestBody = { ...req.body };
 
     if (recaptchaToken) {
-      // PENTING: Ikut action dlm flow-automator.js
       const validation = await validateRecaptchaToken(recaptchaToken, 'PINHOLE_GENERATE');
-      
       if (!validation.valid) {
         return res.status(403).json({ error: 'RECAPTCHA_VALIDATION_FAILED', details: validation });
       }
-      
       if (!requestBody.clientContext) requestBody.clientContext = {};
       requestBody.clientContext.recaptchaToken = recaptchaToken;
     }
@@ -174,7 +175,6 @@ app.post('/api/veo/generate-i2v', async (req, res) => {
   }
 });
 
-// Endpoint status & upload (Tiada perubahan logic utama)
 app.post('/api/veo/status', async (req, res) => {
   try {
     const authToken = req.headers.authorization?.replace('Bearer ', '');
@@ -201,7 +201,6 @@ app.post('/api/veo/upload', async (req, res) => {
   } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// Endpoint Download
 app.get('/api/veo/download-video', async (req, res) => {
   try {
     const videoUrl = req.query.url;
