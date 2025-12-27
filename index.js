@@ -59,17 +59,38 @@ async function getJson(response, req) {
 
 
 // ===============================
-// 🧩 MIDDLEWARE
+// 🧩 MIDDLEWARE - APPLE FIX
 // ===============================
 app.use(cors({
-  origin: [
-    'http://localhost:8080',
-    'https://dev.monoklix.com',
-    'https://monoklix.com'
-  ],
-  credentials: true
+  origin: function(origin, callback) {
+    // Allow requests from your domains
+    const allowedOrigins = [
+      'https://app.monoklix.com',
+      'https://app2.monoklix.com',
+      'https://dev.monoklix.com',
+      'https://dev1.monoklix.com',
+      'https://apple.monoklix.com',
+      'http://localhost:8080',
+      'http://localhost:3001'
+    ];
+    
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS not allowed'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-User-Username'],
+  maxAge: 86400,
+  optionsSuccessStatus: 200
 }));
+
 app.use(express.json({ limit: '50mb' }));
+
+// Apple devices preflight fix
+app.options('*', cors());
 
 // ===============================
 // 🔍 HEALTH CHECK
